@@ -13,7 +13,7 @@ use crate::{
         base::RemoveDirectory,
         common::{ConfigureInitService, ConfigureNix, CreateUsersAndGroups, ProvisionNix},
         macos::{
-            ConfigureRemoteBuilding, CreateNixHookService, CreateNixVolume, SetTmutilExclusions,
+            ConfigureRemoteBuilding, CreateNixVolume, SetTmutilExclusions,
         },
         StatefulAction,
     },
@@ -142,16 +142,16 @@ impl Planner for Macos {
             .map_err(PlannerError::Action)?
             .boxed(),
         );
-        plan.push(
-            ProvisionNix::plan(&self.settings)
-                .await
-                .map_err(PlannerError::Action)?
-                .boxed(),
-        );
         // Auto-allocate uids is broken on Mac. Tools like `whoami` don't work.
         // e.g. https://github.com/NixOS/nix/issues/8444
         plan.push(
             CreateUsersAndGroups::plan(self.settings.clone())
+                .await
+                .map_err(PlannerError::Action)?
+                .boxed(),
+        );
+        plan.push(
+            ProvisionNix::plan(&self.settings)
                 .await
                 .map_err(PlannerError::Action)?
                 .boxed(),
@@ -175,14 +175,14 @@ impl Planner for Macos {
                 .boxed(),
         );
 
-        if self.settings.modify_profile {
-            plan.push(
-                CreateNixHookService::plan()
-                    .await
-                    .map_err(PlannerError::Action)?
-                    .boxed(),
-            );
-        }
+        // if self.settings.modify_profile {
+        //     plan.push(
+        //         CreateNixHookService::plan()
+        //             .await
+        //             .map_err(PlannerError::Action)?
+        //             .boxed(),
+        //     );
+        // }
 
         plan.push(
             ConfigureInitService::plan(InitSystem::Launchd, true)

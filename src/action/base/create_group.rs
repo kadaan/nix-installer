@@ -1,4 +1,4 @@
-use nix::unistd::Group;
+use uzers::get_group_by_name;
 use target_lexicon::OperatingSystem;
 use tokio::process::Command;
 use tracing::{span, Span};
@@ -38,22 +38,21 @@ impl CreateGroup {
         }
 
         // Ensure group does not exists
-        if let Some(group) = Group::from_name(name.as_str())
-            .map_err(|e| ActionErrorKind::GettingGroupId(name.clone(), e))
-            .map_err(Self::error)?
-        {
-            if group.gid.as_raw() != gid {
-                return Err(Self::error(ActionErrorKind::GroupGidMismatch(
-                    name.clone(),
-                    group.gid.as_raw(),
-                    gid,
-                )));
-            }
-
-            tracing::debug!("Creating group `{}` already complete", this.name);
-            return Ok(StatefulAction::completed(this));
+        let expected_group = get_group_by_name(name.as_str());
+        if expected_group.is_none() {
+            return Ok(StatefulAction::uncompleted(this));
         }
-        Ok(StatefulAction::uncompleted(this))
+        let expected_gid = expected_group.unwrap().gid();
+        if expected_gid != gid {
+            return Err(Self::error(ActionErrorKind::GroupGidMismatch(
+                name.clone(),
+                expected_gid,
+                gid,
+            )));
+        }
+
+        tracing::debug!("Creating group `{}` already complete", this.name);
+        return Ok(StatefulAction::completed(this));
     }
 }
 

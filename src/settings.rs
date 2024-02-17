@@ -60,18 +60,18 @@ Settings which only apply to certain [`Planner`](crate::planner::Planner)s shoul
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 #[cfg_attr(feature = "cli", derive(clap::Parser))]
 pub struct CommonSettings {
-    /// Modify the user profile to automatically load nix
-    #[cfg_attr(
-        feature = "cli",
-        clap(
-            action(ArgAction::SetFalse),
-            default_value = "true",
-            global = true,
-            env = "NIX_INSTALLER_MODIFY_PROFILE",
-            long = "no-modify-profile"
-        )
-    )]
-    pub modify_profile: bool,
+    // /// Modify the user profile to automatically load nix
+    // #[cfg_attr(
+    //     feature = "cli",
+    //     clap(
+    //         action(ArgAction::SetFalse),
+    //         default_value = "true",
+    //         global = true,
+    //         env = "NIX_INSTALLER_MODIFY_PROFILE",
+    //         long = "no-modify-profile"
+    //     )
+    // )]
+    // pub modify_profile: bool,
 
     /// The Nix build group name
     #[cfg_attr(
@@ -302,7 +302,7 @@ impl CommonSettings {
         };
 
         Ok(Self {
-            modify_profile: true,
+            // modify_profile: true,
             nix_build_group_name: String::from("nixbld"),
             nix_build_group_id: 30_000,
             nix_build_user_id_base,
@@ -323,7 +323,7 @@ impl CommonSettings {
     /// A listing of the settings, suitable for [`Planner::settings`](crate::planner::Planner::settings)
     pub fn settings(&self) -> Result<HashMap<String, serde_json::Value>, InstallSettingsError> {
         let Self {
-            modify_profile,
+            // modify_profile,
             nix_build_group_name,
             nix_build_group_id,
             nix_build_user_prefix,
@@ -341,10 +341,10 @@ impl CommonSettings {
         } = self;
         let mut map = HashMap::default();
 
-        map.insert(
-            "modify_profile".into(),
-            serde_json::to_value(modify_profile)?,
-        );
+        // map.insert(
+        //     "modify_profile".into(),
+        //     serde_json::to_value(modify_profile)?,
+        // );
         map.insert(
             "nix_build_group_name".into(),
             serde_json::to_value(nix_build_group_name)?,

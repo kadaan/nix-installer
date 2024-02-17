@@ -130,73 +130,9 @@ impl Action for CreateUser {
             }
             | OperatingSystem::Darwin => {
                 execute_command(
-                    Command::new("/usr/bin/dscl")
+                    Command::new("/usr/sbin/sysadminctl")
                         .process_group(0)
-                        .args([".", "-create", &format!("/Users/{name}")])
-                        .stdin(std::process::Stdio::null()),
-                )
-                .await
-                .map_err(Self::error)?;
-                execute_command(
-                    Command::new("/usr/bin/dscl")
-                        .process_group(0)
-                        .args([
-                            ".",
-                            "-create",
-                            &format!("/Users/{name}"),
-                            "UniqueID",
-                            &format!("{uid}"),
-                        ])
-                        .stdin(std::process::Stdio::null()),
-                )
-                .await
-                .map_err(Self::error)?;
-                execute_command(
-                    Command::new("/usr/bin/dscl")
-                        .process_group(0)
-                        .args([
-                            ".",
-                            "-create",
-                            &format!("/Users/{name}"),
-                            "PrimaryGroupID",
-                            &format!("{gid}"),
-                        ])
-                        .stdin(std::process::Stdio::null()),
-                )
-                .await
-                .map_err(Self::error)?;
-                execute_command(
-                    Command::new("/usr/bin/dscl")
-                        .process_group(0)
-                        .args([
-                            ".",
-                            "-create",
-                            &format!("/Users/{name}"),
-                            "NFSHomeDirectory",
-                            "/var/empty",
-                        ])
-                        .stdin(std::process::Stdio::null()),
-                )
-                .await
-                .map_err(Self::error)?;
-                execute_command(
-                    Command::new("/usr/bin/dscl")
-                        .process_group(0)
-                        .args([
-                            ".",
-                            "-create",
-                            &format!("/Users/{name}"),
-                            "UserShell",
-                            "/sbin/nologin",
-                        ])
-                        .stdin(std::process::Stdio::null()),
-                )
-                .await
-                .map_err(Self::error)?;
-                execute_command(
-                    Command::new("/usr/bin/dscl")
-                        .process_group(0)
-                        .args([".", "-create", &format!("/Users/{name}"), "IsHidden", "1"])
+                        .args(["-addUser", name, "-UID", &uid.to_string(), "-GID", &gid.to_string(), "-roleAccount"])
                         .stdin(std::process::Stdio::null()),
                 )
                 .await

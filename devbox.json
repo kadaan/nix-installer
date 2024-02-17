@@ -1,0 +1,21 @@
+{
+  "packages": [
+    "rustc@1.75.0",
+    "rustup@1.26.0",
+    "libiconv@2.37",
+    "darwin.apple_sdk.frameworks.Security",
+    "just@1.24.0",
+    "zig@0.11.0"
+  ],
+  "shell": {
+    "init_hook": [
+      "rustup install nightly-2024-03-12-aarch64-apple-darwin",
+      "cargo install cargo-run-bin"
+    ],
+    "scripts": {
+      "build": [
+        "just release \"$@\""
+      ]
+    }
+  }
+}

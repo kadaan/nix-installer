@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{
-    action::{ActionError, ActionErrorKind, ActionTag, StatefulAction},
-    execute_command, set_env,
-};
+use crate::{action::{ActionError, ActionErrorKind, ActionTag, StatefulAction}, execute_command, set_env};
 
 use glob::glob;
 
@@ -11,6 +8,9 @@ use tokio::{io::AsyncWriteExt, process::Command};
 use tracing::{span, Span};
 
 use crate::action::{Action, ActionDescription};
+use crate::cli::CURRENT_USERNAME;
+use crate::plan::chown_nix_store;
+use crate::settings::{CommonSettings, SCRATCH_DIR};
 
 /**
 Setup the default Nix profile with `nss-cacert` and `nix` itself.
@@ -18,12 +18,19 @@ Setup the default Nix profile with `nss-cacert` and `nix` itself.
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct SetupDefaultProfile {
     unpacked_path: PathBuf,
+    nix_build_group_name: String,
 }
 
 impl SetupDefaultProfile {
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn plan(unpacked_path: PathBuf) -> Result<StatefulAction<Self>, ActionError> {
-        Ok(Self { unpacked_path }.into())
+    pub async fn plan(settings: &CommonSettings) -> Result<StatefulAction<Self>, ActionError> {
+        let unpacked_path = PathBuf::from(SCRATCH_DIR);
+        let nix_build_group_name = settings.nix_build_group_name.clone();
+
+        Ok(Self {
+            unpacked_path,
+            nix_build_group_name,
+        }.into())
     }
 }
 
@@ -209,6 +216,10 @@ impl Action for SetupDefaultProfile {
         )
         .await
         .map_err(Self::error)?;
+
+        chown_nix_store(CURRENT_USERNAME.get().unwrap().to_string(), Some(self.nix_build_group_name.clone()))
+            .await
+            .map_err(Self::error)?;
 
         set_env(
             "NIX_SSL_CERT_FILE",

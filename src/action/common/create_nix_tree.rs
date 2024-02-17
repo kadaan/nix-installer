@@ -1,9 +1,11 @@
+use crate::cli::CURRENT_USERNAME;
 use tracing::{span, Span};
 
 use crate::action::base::CreateDirectory;
 use crate::action::{
     Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction,
 };
+use crate::settings::CommonSettings;
 
 const PATHS: &[&str] = &[
     "/nix/var",
@@ -31,12 +33,14 @@ pub struct CreateNixTree {
 
 impl CreateNixTree {
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn plan() -> Result<StatefulAction<Self>, ActionError> {
+    pub async fn plan(settings: &CommonSettings) -> Result<StatefulAction<Self>, ActionError> {
         let mut create_directories = Vec::default();
+        let user = CURRENT_USERNAME.get().unwrap();
         for path in PATHS {
             // We use `create_dir` over `create_dir_all` to ensure we always set permissions right
+            let usr = user.clone();
             create_directories.push(
-                CreateDirectory::plan(path, String::from("root"), None, 0o0755, true)
+                CreateDirectory::plan(path, Some(usr), settings.nix_build_group_name.clone(), 0o0775, true)
                     .await
                     .map_err(Self::error)?,
             )

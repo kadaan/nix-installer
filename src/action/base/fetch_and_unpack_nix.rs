@@ -4,11 +4,10 @@ use bytes::{Buf, Bytes};
 use reqwest::Url;
 use tracing::{span, Span};
 
-use crate::{
-    action::{Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction},
-    parse_ssl_cert,
-    settings::UrlOrPath,
-};
+use crate::{action::{Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction}, parse_ssl_cert, settings::UrlOrPath};
+use crate::cli::CURRENT_USERNAME;
+use crate::plan::chown_nix_store;
+use crate::settings::CommonSettings;
 
 /**
 Fetch a URL to the given path
@@ -19,18 +18,20 @@ pub struct FetchAndUnpackNix {
     dest: PathBuf,
     proxy: Option<Url>,
     ssl_cert_file: Option<PathBuf>,
+    nix_build_group_name: String,
 }
 
 impl FetchAndUnpackNix {
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn plan(
-        url_or_path: UrlOrPath,
-        dest: PathBuf,
-        proxy: Option<Url>,
-        ssl_cert_file: Option<PathBuf>,
-    ) -> Result<StatefulAction<Self>, ActionError> {
+    pub async fn plan(settings: &CommonSettings) -> Result<StatefulAction<Self>, ActionError> {
         // TODO(@hoverbear): Check URL exists?
         // TODO(@hoverbear): Check tempdir exists
+
+        let url_or_path = settings.nix_package_url.clone();
+        let dest = PathBuf::from(crate::settings::SCRATCH_DIR);
+        let proxy = settings.proxy.clone();
+        let ssl_cert_file = settings.ssl_cert_file.clone();
+        let nix_build_group_name = settings.nix_build_group_name.clone();
 
         if let UrlOrPath::Url(url) = &url_or_path {
             match url.scheme() {
@@ -55,6 +56,7 @@ impl FetchAndUnpackNix {
             dest,
             proxy,
             ssl_cert_file,
+            nix_build_group_name,
         }
         .into())
     }
@@ -165,6 +167,10 @@ impl Action for FetchAndUnpackNix {
         archive
             .unpack(&dest_clone)
             .map_err(FetchUrlError::Unarchive)
+            .map_err(Self::error)?;
+
+        chown_nix_store(CURRENT_USERNAME.get().unwrap().to_string(), Some(self.nix_build_group_name.clone()))
+            .await
             .map_err(Self::error)?;
 
         Ok(())

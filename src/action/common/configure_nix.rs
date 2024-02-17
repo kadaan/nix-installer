@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use crate::{
     action::{
         base::SetupDefaultProfile,
@@ -7,7 +5,7 @@ use crate::{
         Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction,
     },
     planner::ShellProfileLocations,
-    settings::{CommonSettings, SCRATCH_DIR},
+    settings::CommonSettings,
 };
 
 use tracing::{span, Instrument, Span};
@@ -28,28 +26,17 @@ impl ConfigureNix {
         shell_profile_locations: ShellProfileLocations,
         settings: &CommonSettings,
     ) -> Result<StatefulAction<Self>, ActionError> {
-        let setup_default_profile = SetupDefaultProfile::plan(PathBuf::from(SCRATCH_DIR))
+        let setup_default_profile = SetupDefaultProfile::plan(settings)
             .await
             .map_err(Self::error)?;
 
-        let configure_shell_profile = if settings.modify_profile {
-            Some(
-                ConfigureShellProfile::plan(shell_profile_locations)
-                    .await
-                    .map_err(Self::error)?,
-            )
-        } else {
-            None
-        };
-        let place_nix_configuration = PlaceNixConfiguration::plan(
-            settings.nix_build_group_name.clone(),
-            settings.proxy.clone(),
-            settings.ssl_cert_file.clone(),
-            settings.extra_conf.clone(),
-            settings.force,
-        )
-        .await
-        .map_err(Self::error)?;
+        let configure_shell_profile =  Some(ConfigureShellProfile::plan(shell_profile_locations)
+            .await
+            .map_err(Self::error)?);
+
+        let place_nix_configuration = PlaceNixConfiguration::plan(settings)
+            .await
+            .map_err(Self::error)?;
 
         Ok(Self {
             place_nix_configuration,

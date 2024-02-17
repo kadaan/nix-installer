@@ -50,7 +50,7 @@ impl BootstrapLaunchctlService {
             command_output.status.success() || command_output.status.code() == Some(37)
         };
 
-        let is_disabled = service_is_disabled(&domain, &service)
+        let is_disabled = service_is_disabled(domain.as_str(), &service)
             .await
             .map_err(Self::error)?;
 

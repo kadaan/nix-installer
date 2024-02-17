@@ -22,7 +22,9 @@ use color_eyre::{
     eyre::{eyre, WrapErr},
     Section,
 };
+use nix::unistd::{chown, Uid};
 use owo_colors::OwoColorize;
+use crate::cli::CURRENT_UID;
 
 const EXISTING_INCOMPATIBLE_PLAN_GUIDANCE: &str = "\
     If you are trying to upgrade Nix, try running `sudo -i nix upgrade-nix` instead.\n\
@@ -235,7 +237,7 @@ impl CommandExecute for Install {
 
         let (tx, rx1) = signal_channel().await?;
 
-        match install_plan.install(rx1).await {
+        match install_plan.install(settings, rx1).await {
             Err(err) => {
                 // Attempt to copy self to the store if possible, but since the install failed, this might not work, that's ok.
                 copy_self_to_nix_dir().await.ok();
@@ -338,8 +340,10 @@ impl CommandExecute for Install {
 
 #[tracing::instrument(level = "debug")]
 async fn copy_self_to_nix_dir() -> Result<(), std::io::Error> {
+    let target = String::from("/nix/nix-installer");
     let path = std::env::current_exe()?;
-    tokio::fs::copy(path, "/nix/nix-installer").await?;
-    tokio::fs::set_permissions("/nix/nix-installer", PermissionsExt::from_mode(0o0755)).await?;
+    tokio::fs::copy(path, target.clone()).await?;
+    tokio::fs::set_permissions(target.clone(), PermissionsExt::from_mode(0o0755)).await?;
+    chown(target.as_str(), Some(Uid::from_raw(*CURRENT_UID.get().unwrap())), None)?;
     Ok(())
 }

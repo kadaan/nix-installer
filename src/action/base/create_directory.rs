@@ -1,7 +1,7 @@
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use nix::unistd::{chown, Group, User};
+use nix::unistd::{chown, Gid, User};
 
 use tokio::fs::{create_dir, remove_dir_all, remove_file};
 use tokio::process::Command;
@@ -10,6 +10,7 @@ use tracing::{span, Span};
 use crate::action::{Action, ActionDescription, ActionErrorKind, ActionState};
 use crate::action::{ActionError, StatefulAction};
 use crate::execute_command;
+use uzers::get_group_by_name;
 
 /** Create a directory at the given location, optionally with an owning user, group, and mode.
 
@@ -72,18 +73,17 @@ impl CreateDirectory {
             }
             if let Some(group) = &group {
                 // If the file exists, the group must also exist to be correct.
-                let expected_gid = Group::from_name(group.as_str())
-                    .map_err(|e| ActionErrorKind::GettingGroupId(group.clone(), e))
-                    .map_err(Self::error)?
-                    .ok_or_else(|| ActionErrorKind::NoUser(group.clone()))
-                    .map_err(Self::error)?
-                    .gid;
+                let expected_group = get_group_by_name(group.as_str());
+                if expected_group.is_none() {
+                    return Err(Self::error(ActionErrorKind::NoGroup(group.clone())));
+                }
+                let expected_gid = expected_group.unwrap().gid();
                 let found_gid = metadata.gid();
-                if found_gid != expected_gid.as_raw() {
+                if found_gid != expected_gid {
                     return Err(Self::error(ActionErrorKind::PathGroupMismatch(
                         path.clone(),
                         found_gid,
-                        expected_gid.as_raw(),
+                        expected_gid,
                     )));
                 }
             }
@@ -159,12 +159,10 @@ impl Action for CreateDirectory {
 
         let gid = if let Some(group) = group {
             Some(
-                Group::from_name(group.as_str())
-                    .map_err(|e| ActionErrorKind::GettingGroupId(group.clone(), e))
-                    .map_err(Self::error)?
+                Gid::from_raw(get_group_by_name(group.as_str())
                     .ok_or(ActionErrorKind::NoGroup(group.clone()))
                     .map_err(Self::error)?
-                    .gid,
+                    .gid())
             )
         } else {
             None

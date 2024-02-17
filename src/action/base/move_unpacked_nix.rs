@@ -2,13 +2,17 @@ use std::{
     os::unix::prelude::PermissionsExt,
     path::{Path, PathBuf},
 };
+use nix::unistd::{chown, Gid, Uid};
 
 use tracing::{span, Span};
+use uzers::get_group_by_name;
 use walkdir::WalkDir;
 
 use crate::action::{
     Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction,
 };
+use crate::cli::CURRENT_UID;
+use crate::settings::{CommonSettings, SCRATCH_DIR};
 
 pub(crate) const DEST: &str = "/nix/";
 
@@ -18,13 +22,20 @@ Move an unpacked Nix at `src` to `/nix`
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct MoveUnpackedNix {
     unpacked_path: PathBuf,
+    nix_build_group_name: String,
 }
 
 impl MoveUnpackedNix {
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn plan(unpacked_path: PathBuf) -> Result<StatefulAction<Self>, ActionError> {
+    pub async fn plan(settings: &CommonSettings) -> Result<StatefulAction<Self>, ActionError> {
         // Note: Do NOT try to check for the src/dest since the installer creates those
-        Ok(Self { unpacked_path }.into())
+        let unpacked_path = PathBuf::from(SCRATCH_DIR);
+        let nix_build_group_name = settings.nix_build_group_name.clone();
+
+        Ok(Self {
+            unpacked_path,
+            nix_build_group_name,
+        }.into())
     }
 }
 
@@ -59,7 +70,7 @@ impl Action for MoveUnpackedNix {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn execute(&mut self) -> Result<(), ActionError> {
-        let Self { unpacked_path } = self;
+        let Self { unpacked_path, nix_build_group_name } = self;
 
         // This is the `nix-$VERSION` folder which unpacks from the tarball, not a nix derivation
         let found_nix_paths = glob::glob(&format!("{}/nix-*", unpacked_path.display()))
@@ -86,6 +97,15 @@ impl Action for MoveUnpackedNix {
             tokio::fs::create_dir(&dest_store)
                 .await
                 .map_err(|e| ActionErrorKind::CreateDirectory(dest_store.clone(), e))
+                .map_err(Self::error)?;
+
+            let gid = Some(Gid::from_raw(get_group_by_name(nix_build_group_name)
+                .ok_or(ActionErrorKind::NoGroup(nix_build_group_name.to_string()))
+                .map_err(Self::error)?
+                .gid()));
+
+            chown(&dest_store, Some(Uid::from_raw(*CURRENT_UID.get().unwrap())), gid)
+                .map_err(|e| ActionErrorKind::Chown(dest_store.clone(), e))
                 .map_err(Self::error)?;
         }
 

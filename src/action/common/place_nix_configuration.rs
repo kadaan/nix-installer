@@ -1,5 +1,4 @@
 use tracing::{span, Span};
-use url::Url;
 
 use crate::action::base::create_or_merge_nix_config::CreateOrMergeNixConfigError;
 use crate::action::base::{CreateDirectory, CreateOrMergeNixConfig};
@@ -7,9 +6,10 @@ use crate::action::{
     Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction,
 };
 use crate::parse_ssl_cert;
-use crate::settings::UrlOrPathOrString;
+use crate::settings::{CommonSettings, UrlOrPathOrString};
 use indexmap::map::Entry;
 use std::path::PathBuf;
+use crate::cli::CURRENT_USERNAME;
 
 const NIX_CONF_FOLDER: &str = "/etc/nix";
 const NIX_CONF: &str = "/etc/nix/nix.conf";
@@ -25,13 +25,12 @@ pub struct PlaceNixConfiguration {
 
 impl PlaceNixConfiguration {
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn plan(
-        nix_build_group_name: String,
-        proxy: Option<Url>,
-        ssl_cert_file: Option<PathBuf>,
-        extra_conf: Vec<UrlOrPathOrString>,
-        force: bool,
-    ) -> Result<StatefulAction<Self>, ActionError> {
+    pub async fn plan(settings: &CommonSettings) -> Result<StatefulAction<Self>, ActionError> {
+        let nix_build_group_name = settings.nix_build_group_name.clone();
+        let proxy = settings.proxy.clone();
+        let ssl_cert_file = settings.ssl_cert_file.clone();
+        let extra_conf = settings.extra_conf.clone();
+        let force = settings.force;
         let mut extra_conf_text = vec![];
         for extra in extra_conf {
             let buf = match &extra {
@@ -90,7 +89,7 @@ impl PlaceNixConfiguration {
             .map_err(Self::error)?;
         let settings = nix_config.settings_mut();
 
-        settings.insert("build-users-group".to_string(), nix_build_group_name);
+        settings.insert("build-users-group".to_string(), nix_build_group_name.clone());
         let experimental_features = ["nix-command", "flakes", "repl-flake"];
         match settings.entry("experimental-features".to_string()) {
             Entry::Occupied(mut slot) => {
@@ -133,8 +132,16 @@ impl PlaceNixConfiguration {
             "upgrade-nix-store-path-url".to_string(),
             "https://install.determinate.systems/nix-upgrade/stable/universal".to_string(),
         );
+        settings.insert(
+            "keep-derivations".to_string(),
+            "false".to_string(),
+        );
+        settings.insert(
+            "keep-outputs".to_string(),
+            "false".to_string(),
+        );
 
-        let create_directory = CreateDirectory::plan(NIX_CONF_FOLDER, None, None, 0o0755, force)
+        let create_directory = CreateDirectory::plan(NIX_CONF_FOLDER, CURRENT_USERNAME.get().unwrap().to_string(), nix_build_group_name.clone(), 0o0755, force)
             .await
             .map_err(Self::error)?;
         let create_or_merge_nix_config = CreateOrMergeNixConfig::plan(NIX_CONF, nix_config)

@@ -570,6 +570,16 @@ pub enum ActionErrorKind {
     ),
     #[error("Unknown url scheme")]
     UnknownUrlScheme,
+    #[error("Couldn't get terminal")]
+    CouldNotGetTerminal,
+    #[error("Failed to prompt for password in terminal")]
+    TerminalPasswordPrompt(#[source] std::io::Error),
+    #[error("Couldn't write to terminal")]
+    TerminalWrite(#[source] std::io::Error),
+    #[error("Couldn't write to terminal")]
+    TerminalFlush(#[source] std::io::Error),
+    #[error("Couldn't terminal enable secure mode")]
+    TerminalEnableSecureMode(#[source] term::Error),
 }
 
 impl ActionErrorKind {

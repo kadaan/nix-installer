@@ -1,5 +1,10 @@
+/.idea
 /target
+.DS_Store
 .ci-store
 .direnv
 result*
 src/action/linux/selinux/nix.mod
+.devbox/
+.bin/
+dist/

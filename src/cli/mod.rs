@@ -6,6 +6,7 @@ pub(crate) mod arg;
 mod interaction;
 pub(crate) mod subcommand;
 
+use std::env;
 use clap::Parser;
 use eyre::WrapErr;
 use owo_colors::OwoColorize;
@@ -13,6 +14,11 @@ use std::{ffi::CString, process::ExitCode};
 use tokio::sync::broadcast::{Receiver, Sender};
 
 use self::subcommand::NixInstallerSubcommand;
+use uzers::{get_current_username, get_user_by_uid, get_current_uid};
+use once_cell::sync::OnceCell;
+
+pub static CURRENT_USERNAME: OnceCell<String> = OnceCell::new();
+pub static CURRENT_UID: OnceCell<u32> = OnceCell::new();
 
 #[async_trait::async_trait]
 pub trait CommandExecute {
@@ -45,9 +51,9 @@ impl CommandExecute for NixInstallerCli {
 
         match subcommand {
             NixInstallerSubcommand::Plan(plan) => plan.execute().await,
-            NixInstallerSubcommand::SelfTest(self_test) => self_test.execute().await,
+            // NixInstallerSubcommand::SelfTest(self_test) => self_test.execute().await,
             NixInstallerSubcommand::Install(install) => install.execute().await,
-            NixInstallerSubcommand::Repair(restore_shell) => restore_shell.execute().await,
+            // NixInstallerSubcommand::Repair(restore_shell) => restore_shell.execute().await,
             NixInstallerSubcommand::Uninstall(revert) => revert.execute().await,
         }
     }
@@ -96,6 +102,7 @@ pub fn ensure_root() -> eyre::Result<()> {
                 .yellow()
                 .dimmed()
         );
+
         let sudo_cstring = CString::new("sudo").wrap_err("Making C string of `sudo`")?;
 
         let args = std::env::args();
@@ -147,6 +154,18 @@ pub fn ensure_root() -> eyre::Result<()> {
         tracing::trace!("Execvp'ing `{sudo_cstring:?}` with args `{arg_vec_cstring:?}`");
         nix::unistd::execvp(&sudo_cstring, &arg_vec_cstring)
             .wrap_err("Executing `nix-installer` as `root` via `sudo`")?;
+    } else {
+        let key = "SUDO_UID";
+        match env::var(key) {
+            Ok(val) => {
+                CURRENT_UID.set(val.parse::<u32>().unwrap()).unwrap();
+                CURRENT_USERNAME.set(get_user_by_uid(val.parse::<u32>().unwrap()).unwrap().name().to_string_lossy().into_owned()).unwrap();
+            },
+            Err(_) => {
+                CURRENT_UID.set(get_current_uid()).unwrap();
+                CURRENT_USERNAME.set(get_current_username().unwrap().to_string_lossy().into_owned()).unwrap();
+            },
+        }
     }
     Ok(())
 }

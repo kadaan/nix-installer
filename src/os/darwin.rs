@@ -6,6 +6,9 @@ pub struct DiskUtilInfoOutput {
     pub parent_whole_disk: String,
     pub global_permissions_enabled: bool,
     pub mount_point: Option<PathBuf>,
+
+    #[serde(alias = "VolumeUUID")]
+    pub volume_uuid: String,
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
