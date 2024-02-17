@@ -1,6 +1,10 @@
+use simple_home_dir::home_dir;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
+use std::fs::File;
+use std::io::{Read, Write};
+use tokio::fs::remove_file;
 use tokio::process::Command;
 use tracing::{span, Span};
 
@@ -8,6 +12,7 @@ use crate::action::{ActionError, ActionErrorKind, ActionTag, StatefulAction};
 use crate::execute_command;
 
 use crate::action::{Action, ActionDescription};
+use crate::cli::CURRENT_UID;
 use crate::settings::InitSystem;
 
 #[cfg(target_os = "linux")]
@@ -23,10 +28,16 @@ const TMPFILES_SRC: &str = "/nix/var/nix/profiles/default/lib/tmpfiles.d/nix-dae
 #[cfg(target_os = "linux")]
 const TMPFILES_DEST: &str = "/etc/tmpfiles.d/nix-daemon.conf";
 #[cfg(target_os = "macos")]
-const DARWIN_NIX_DAEMON_DEST: &str = "/Library/LaunchDaemons/org.nixos.nix-daemon.plist";
+pub fn darwin_nix_daemon_dest() -> String {
+    home_dir().unwrap().display().to_string() + "/Library/LaunchAgents/org.nixos.nix-daemon.plist"
+}
 #[cfg(target_os = "macos")]
 const DARWIN_NIX_DAEMON_SOURCE: &str =
     "/nix/var/nix/profiles/default/Library/LaunchDaemons/org.nixos.nix-daemon.plist";
+
+#[cfg(target_os = "macos")]
+const DARWIN_NIX_DAEMON_SERVICE: &str = "org.nixos.nix-daemon";
+
 /**
 Configure the init to run the Nix daemon
 */
@@ -147,11 +158,12 @@ impl Action for ConfigureInitService {
             },
             #[cfg(target_os = "macos")]
             InitSystem::Launchd => {
+                let dest = darwin_nix_daemon_dest();
                 let mut explanation = vec![format!(
-                    "Copy `{DARWIN_NIX_DAEMON_SOURCE}` to `DARWIN_NIX_DAEMON_DEST`"
+                    "Copy `{DARWIN_NIX_DAEMON_SOURCE}` to `{dest}`"
                 )];
                 if self.start_daemon {
-                    explanation.push(format!("Run `launchctl load {DARWIN_NIX_DAEMON_DEST}`"));
+                    explanation.push(format!("Run `launchctl load {dest}`"));
                 }
                 vec.push(ActionDescription::new(self.tracing_synopsis(), explanation))
             },
@@ -169,12 +181,47 @@ impl Action for ConfigureInitService {
             #[cfg(target_os = "macos")]
             InitSystem::Launchd => {
                 let src = std::path::Path::new(DARWIN_NIX_DAEMON_SOURCE);
-                tokio::fs::copy(src, DARWIN_NIX_DAEMON_DEST)
+                let mut src_file = File::open(src)
+                    .map_err(|e| {
+                        Self::error(ActionErrorKind::Open(
+                            src.to_path_buf(),
+                            e,
+                        ))
+                    })?;
+                let mut src_data = String::new();
+                src_file.read_to_string(&mut src_data)
+                    .map_err(|e| {
+                        Self::error(ActionErrorKind::Read(
+                            src.to_path_buf(),
+                            e,
+                        ))
+                    })?;
+                drop(src_file);
+
+                let log_file_path = format!("{}/Library/Logs/nix-daemon.log", home_dir().unwrap().display().to_string());
+                let modified_data = src_data.replace(&String::from("/var/log/nix-daemon.log"), &log_file_path);
+
+                let mut dst_file = File::create(src)
+                    .map_err(|e| {
+                        Self::error(ActionErrorKind::Truncate(
+                            src.to_path_buf(),
+                            e,
+                        ))
+                    })?;
+                dst_file.write(modified_data.as_bytes())
+                    .map_err(|e| {
+                        Self::error(ActionErrorKind::Write(
+                            src.to_path_buf(),
+                            e,
+                        ))
+                    })?;
+
+                tokio::fs::copy(src, darwin_nix_daemon_dest())
                     .await
                     .map_err(|e| {
                         Self::error(ActionErrorKind::Copy(
                             src.to_path_buf(),
-                            PathBuf::from(DARWIN_NIX_DAEMON_DEST),
+                            PathBuf::from(darwin_nix_daemon_dest()),
                             e,
                         ))
                     })?;
@@ -183,16 +230,15 @@ impl Action for ConfigureInitService {
                     Command::new("launchctl")
                         .process_group(0)
                         .args(["load", "-w"])
-                        .arg(DARWIN_NIX_DAEMON_DEST)
+                        .arg(darwin_nix_daemon_dest())
                         .stdin(std::process::Stdio::null()),
                 )
                 .await
                 .map_err(Self::error)?;
 
-                let domain = "system";
-                let service = "org.nixos.nix-daemon";
+                let domain = format!("gui/{}", CURRENT_UID.get().unwrap());
 
-                let is_disabled = crate::action::macos::service_is_disabled(domain, service)
+                let is_disabled = crate::action::macos::service_is_disabled(domain.as_str(), DARWIN_NIX_DAEMON_SERVICE)
                     .await
                     .map_err(Self::error)?;
                 if is_disabled {
@@ -200,7 +246,7 @@ impl Action for ConfigureInitService {
                         Command::new("launchctl")
                             .process_group(0)
                             .arg("enable")
-                            .arg(&format!("{domain}/{service}"))
+                            .arg(&format!("{domain}/{DARWIN_NIX_DAEMON_SERVICE}"))
                             .stdin(std::process::Stdio::null()),
                     )
                     .await
@@ -211,9 +257,9 @@ impl Action for ConfigureInitService {
                     execute_command(
                         Command::new("launchctl")
                             .process_group(0)
-                            .arg("kickstart")
-                            .arg("-k")
-                            .arg(&format!("{domain}/{service}"))
+                            .arg("bootstrap")
+                            .arg(domain)
+                            .arg(darwin_nix_daemon_dest())
                             .stdin(std::process::Stdio::null()),
                     )
                     .await
@@ -371,8 +417,8 @@ impl Action for ConfigureInitService {
             #[cfg(target_os = "macos")]
             InitSystem::Launchd => {
                 vec![ActionDescription::new(
-                    "Unconfigure Nix daemon related settings with launchctl".to_string(),
-                    vec![format!("Run `launchctl unload {DARWIN_NIX_DAEMON_DEST}`")],
+                    "Remove Nix daemon related settings with launchctl".to_string(),
+                    vec![format!("Run `launchctl remove {DARWIN_NIX_DAEMON_SERVICE}`")],
                 )]
             },
             #[cfg(not(target_os = "macos"))]
@@ -388,14 +434,51 @@ impl Action for ConfigureInitService {
         match self.init {
             #[cfg(target_os = "macos")]
             InitSystem::Launchd => {
-                execute_command(
-                    Command::new("launchctl")
-                        .process_group(0)
-                        .arg("unload")
-                        .arg(DARWIN_NIX_DAEMON_DEST),
-                )
-                .await
-                .map_err(Self::error)?;
+                let launchd_domain = format!("gui/{}", CURRENT_UID.get().unwrap());
+                let mut check_loaded_command = Command::new("launchctl");
+                check_loaded_command.process_group(0);
+                check_loaded_command.arg("print");
+                check_loaded_command.arg(format!("{}/{}", launchd_domain, DARWIN_NIX_DAEMON_SERVICE));
+                tracing::trace!(
+                    command = format!("{:?}", check_loaded_command.as_std()),
+                    "Executing"
+                );
+                let check_loaded_output = check_loaded_command
+                    .output()
+                    .await
+                    .map_err(|e| ActionErrorKind::command(&check_loaded_command, e))
+                    .map_err(Self::error)?;
+                let needs_bootout = check_loaded_output.status.success();
+                if needs_bootout {
+                    tracing::debug!(
+                        "Detected loaded service `{}` which needs unload",
+                        DARWIN_NIX_DAEMON_SERVICE,
+                    );
+                    execute_command(
+                        Command::new("launchctl")
+                            .process_group(0)
+                            .arg("kill")
+                            .arg("9")
+                            .arg(format!("gui/{}/{}", CURRENT_UID.get().unwrap(), DARWIN_NIX_DAEMON_SERVICE))
+                            .stdin(std::process::Stdio::null()),
+                    )
+                    .await
+                    .map_err(Self::error)?;
+
+                    execute_command(
+                        Command::new("launchctl")
+                            .process_group(0)
+                            .arg("bootout")
+                            .arg(format!("gui/{}/{}", CURRENT_UID.get().unwrap(), DARWIN_NIX_DAEMON_SERVICE))
+                            .stdin(std::process::Stdio::null()),
+                    )
+                    .await
+                    .map_err(Self::error)?;
+                }
+
+                remove_file(darwin_nix_daemon_dest())
+                    .await
+                    .map_err(|e| Self::error(ActionErrorKind::Remove(darwin_nix_daemon_dest().into(), e)))?;
             },
             #[cfg(target_os = "linux")]
             InitSystem::Systemd => {

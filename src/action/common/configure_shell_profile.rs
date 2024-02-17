@@ -1,16 +1,15 @@
 use crate::action::base::{create_or_insert_into_file, CreateDirectory, CreateOrInsertIntoFile};
-use crate::action::{
-    Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction,
-};
+use crate::action::{Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction};
 use crate::planner::ShellProfileLocations;
 
-use nix::unistd::User;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use simple_home_dir::home_dir;
 use tokio::task::JoinSet;
 use tracing::{span, Instrument, Span};
+use crate::cli::CURRENT_USERNAME;
 
 const PROFILE_NIX_FILE_SHELL: &str = "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh";
-const PROFILE_NIX_FILE_FISH: &str = "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.fish";
+// const PROFILE_NIX_FILE_FISH: &str = "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.fish";
 
 /**
 Configure any detected shell profiles to include Nix support
@@ -41,134 +40,62 @@ impl ConfigureShellProfile {
             inde = "    ", // indent
         );
 
-        for profile_target in locations.bash.iter().chain(locations.zsh.iter()) {
-            let profile_target_path = Path::new(profile_target);
-            if let Some(parent) = profile_target_path.parent() {
-                // Some tools (eg `nix-darwin`) create symlinks to these files, don't write to them if that's the case.
-                if !profile_target_path.is_symlink() {
-                    if !parent.exists() {
-                        create_directories.push(
-                            CreateDirectory::plan(parent, None, None, 0o0755, false)
-                                .await
-                                .map_err(Self::error)?,
-                        );
-                    }
+        let zshrc_content = String::from("[[ -d \"${HOME}/.zshrc.d\" ]] && for zshrc in \"${HOME}\"/.zshrc.d/.*; source \"$zshrc\"");
+        let zshrc_path_str = format!("{}/.zshrc", home_dir().unwrap().display().to_string());
+        let zshrc_path = Path::new(zshrc_path_str.as_str().into());
 
-                    create_or_insert_files.push(
-                        CreateOrInsertIntoFile::plan(
-                            profile_target_path,
-                            None,
-                            None,
-                            0o644,
-                            shell_buf.to_string(),
-                            create_or_insert_into_file::Position::Beginning,
-                        )
-                        .await
-                        .map_err(Self::error)?,
-                    );
-                }
+        if zshrc_path.exists() {
+            let zshrc_buf = tokio::fs::read_to_string(&zshrc_path)
+                .await
+                .map_err(|e| Self::error(ActionErrorKind::Read(zshrc_path.to_path_buf(), e)))?;
+
+            if ! zshrc_buf.contains(&zshrc_content) {
+                create_or_insert_files.push(
+                    CreateOrInsertIntoFile::plan(
+                        zshrc_path,
+                        None,
+                        None,
+                        0o644,
+                        zshrc_content,
+                        create_or_insert_into_file::Position::End,
+                    )
+                    .await
+                    .map_err(Self::error)?,
+                );
             }
         }
 
-        let fish_buf = format!(
-            "\n\
-            # Nix\n\
-            if test -e '{PROFILE_NIX_FILE_FISH}'\n\
-            {inde}. '{PROFILE_NIX_FILE_FISH}'\n\
-            end\n\
-            # End Nix\n\
-        \n",
-            inde = "    ", // indent
-        );
-
-        for fish_prefix in &locations.fish.confd_prefixes {
-            let fish_prefix_path = PathBuf::from(fish_prefix);
-
-            if !fish_prefix_path.exists() {
-                // If the prefix doesn't exist, don't create the `conf.d/nix.fish`
-                continue;
-            }
-
-            let mut profile_target = fish_prefix_path;
-            profile_target.push(locations.fish.confd_suffix.clone());
-
+        let path = format!("{}/.zshrc.d/.nixrc", home_dir().unwrap().display().to_string());
+        let profile_target_path = Path::new(path.as_str().into());
+        if let Some(parent) = profile_target_path.parent() {
             // Some tools (eg `nix-darwin`) create symlinks to these files, don't write to them if that's the case.
-            if !profile_target.is_symlink() {
-                if let Some(conf_d) = profile_target.parent() {
+            if !profile_target_path.is_symlink() {
+                if !parent.exists() {
                     create_directories.push(
-                        CreateDirectory::plan(conf_d.to_path_buf(), None, None, 0o755, false)
-                            .await?,
+                        CreateDirectory::plan(
+                            parent,
+                            Some(CURRENT_USERNAME.get().unwrap().to_string()),
+                            Some(String::from("staff")),
+                            0o0755,
+                            false)
+                        .await
+                        .map_err(Self::error)?,
                     );
                 }
 
                 create_or_insert_files.push(
                     CreateOrInsertIntoFile::plan(
-                        profile_target,
-                        None,
-                        None,
+                        profile_target_path,
+                        Some(CURRENT_USERNAME.get().unwrap().to_string()),
+                        Some(String::from("staff")),
                         0o644,
-                        fish_buf.to_string(),
+                        shell_buf.to_string(),
                         create_or_insert_into_file::Position::Beginning,
                     )
-                    .await?,
+                    .await
+                    .map_err(Self::error)?,
                 );
             }
-        }
-        for fish_prefix in &locations.fish.vendor_confd_prefixes {
-            let fish_prefix_path = PathBuf::from(fish_prefix);
-
-            if !fish_prefix_path.exists() {
-                // If the prefix doesn't exist, don't create the `conf.d/nix.fish`
-                continue;
-            }
-
-            let mut profile_target = fish_prefix_path;
-            profile_target.push(locations.fish.vendor_confd_suffix.clone());
-
-            if let Some(conf_d) = profile_target.parent() {
-                create_directories.push(
-                    CreateDirectory::plan(conf_d.to_path_buf(), None, None, 0o755, false).await?,
-                );
-            }
-
-            create_or_insert_files.push(
-                CreateOrInsertIntoFile::plan(
-                    profile_target,
-                    None,
-                    None,
-                    0o644,
-                    fish_buf.to_string(),
-                    create_or_insert_into_file::Position::Beginning,
-                )
-                .await?,
-            );
-        }
-
-        // If the `$GITHUB_PATH` environment exists, we're almost certainly running on Github
-        // Actions, and almost certainly wants the relevant `$PATH` additions added.
-        if let Ok(github_path) = std::env::var("GITHUB_PATH") {
-            let mut buf = "/nix/var/nix/profiles/default/bin\n".to_string();
-            // Actions runners operate as `runner` user by default
-            if let Ok(Some(runner)) = User::from_name("runner") {
-                #[cfg(target_os = "linux")]
-                let path = format!("/home/{}/.nix-profile/bin\n", runner.name);
-                #[cfg(target_os = "macos")]
-                let path = format!("/Users/{}/.nix-profile/bin\n", runner.name);
-                buf += &path;
-            }
-            create_or_insert_files.push(
-                CreateOrInsertIntoFile::plan(
-                    &github_path,
-                    None,
-                    None,
-                    // We want the `nix-installer-action` to not error if it writes here.
-                    // Prior to `v5` this was done in this crate, in `v5` and later, this is done in the action.
-                    0o777,
-                    buf,
-                    create_or_insert_into_file::Position::End,
-                )
-                .await?,
-            );
         }
 
         Ok(Self {

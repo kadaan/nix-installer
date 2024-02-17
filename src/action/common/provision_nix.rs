@@ -6,9 +6,8 @@ use crate::{
         base::{FetchAndUnpackNix, MoveUnpackedNix},
         Action, ActionDescription, ActionError, ActionErrorKind, ActionTag, StatefulAction,
     },
-    settings::{CommonSettings, SCRATCH_DIR},
+    settings::{CommonSettings},
 };
-use std::path::PathBuf;
 
 /**
 Place Nix and it's requirements onto the target
@@ -23,16 +22,11 @@ pub struct ProvisionNix {
 impl ProvisionNix {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn plan(settings: &CommonSettings) -> Result<StatefulAction<Self>, ActionError> {
-        let fetch_nix = FetchAndUnpackNix::plan(
-            settings.nix_package_url.clone(),
-            PathBuf::from(SCRATCH_DIR),
-            settings.proxy.clone(),
-            settings.ssl_cert_file.clone(),
-        )
+        let fetch_nix = FetchAndUnpackNix::plan(settings)
         .await?;
 
-        let create_nix_tree = CreateNixTree::plan().await.map_err(Self::error)?;
-        let move_unpacked_nix = MoveUnpackedNix::plan(PathBuf::from(SCRATCH_DIR))
+        let create_nix_tree = CreateNixTree::plan(settings).await.map_err(Self::error)?;
+        let move_unpacked_nix = MoveUnpackedNix::plan(settings)
             .await
             .map_err(Self::error)?;
         Ok(Self {

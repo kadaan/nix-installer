@@ -25,7 +25,7 @@ fi
 set -u
 
 # If NIX_INSTALLER_FORCE_ALLOW_HTTP is unset or empty, default it.
-NIX_INSTALLER_BINARY_ROOT="${NIX_INSTALLER_BINARY_ROOT:-https://install.determinate.systems/nix}"
+NIX_INSTALLER_BINARY_ROOT="${NIX_INSTALLER_BINARY_ROOT:-https://github.com/kadaan/nix-installer/releases/download/v0.16.2}"
 
 main() {
     downloader --check

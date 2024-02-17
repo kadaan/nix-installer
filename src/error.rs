@@ -3,9 +3,10 @@ use std::{error::Error, path::PathBuf};
 use semver::Version;
 
 use crate::{
-    action::ActionError, planner::PlannerError, self_test::SelfTestError,
+    action::ActionError, planner::PlannerError,
     settings::InstallSettingsError,
 };
+use crate::action::ActionErrorKind;
 
 /// An error occurring during a call defined in this crate
 #[non_exhaustive]
@@ -14,15 +15,15 @@ pub enum NixInstallerError {
     /// An error originating from an [`Action`](crate::action::Action)
     #[error("Error executing action")]
     Action(#[source] ActionError),
-    /// An error originating from a [`self_test`](crate::self_test)
-    #[error("Self test error, install may be only partially functional\n{}", .0.iter().map(|err| {
-        if let Some(source) = err.source() {
-            format!("{err}\n{source}\n")
-        } else {
-            format!("{err}\n") 
-        }
-    }).collect::<Vec<_>>().join("\n"))]
-    SelfTest(Vec<SelfTestError>),
+    // /// An error originating from a [`self_test`](crate::self_test)
+    // #[error("Self test error, install may be only partially functional\n{}", .0.iter().map(|err| {
+    //     if let Some(source) = err.source() {
+    //         format!("{err}\n{source}\n")
+    //     } else {
+    //         format!("{err}\n")
+    //     }
+    // }).collect::<Vec<_>>().join("\n"))]
+    // SelfTest(Vec<SelfTestError>),
     /// An error originating from an [`Action`](crate::action::Action) while reverting
     #[error("Error reverting\n{}", .0.iter().map(|err| {
         if let Some(source) = err.source() {
@@ -35,6 +36,8 @@ pub enum NixInstallerError {
     /// An error while writing the [`InstallPlan`](crate::InstallPlan)
     #[error("Recording install receipt")]
     RecordingReceipt(PathBuf, #[source] std::io::Error),
+    #[error("Chowning path `{0}`")]
+    Chown(String, #[source] ActionErrorKind),
     /// An error while writing copying the binary into the `/nix` folder
     #[error("Copying `nix-installer` binary into `/nix`")]
     CopyingSelf(
@@ -102,8 +105,9 @@ impl HasExpectedErrors for NixInstallerError {
         match self {
             NixInstallerError::Action(action_error) => action_error.kind().expected(),
             NixInstallerError::ActionRevert(_) => None,
-            this @ NixInstallerError::SelfTest(_) => Some(Box::new(this)),
+            // this @ NixInstallerError::SelfTest(_) => Some(Box::new(this)),
             NixInstallerError::RecordingReceipt(_, _) => None,
+            NixInstallerError::Chown(_, _) => None,
             NixInstallerError::CopyingSelf(_) => None,
             NixInstallerError::SerializingReceipt(_) => None,
             this @ NixInstallerError::Cancelled => Some(Box::new(this)),
@@ -126,10 +130,10 @@ impl crate::diagnostics::ErrorDiagnostic for NixInstallerError {
     fn diagnostic(&self) -> String {
         let static_str: &'static str = (self).into();
         let context = match self {
-            Self::SelfTest(self_tests) => self_tests
-                .iter()
-                .map(|self_test| self_test.diagnostic())
-                .collect::<Vec<_>>(),
+            // Self::SelfTest(self_tests) => self_tests
+            //     .iter()
+            //     .map(|self_test| self_test.diagnostic())
+            //     .collect::<Vec<_>>(),
             Self::Action(action_error) => vec![action_error.diagnostic()],
             Self::ActionRevert(action_errors) => action_errors
                 .iter()

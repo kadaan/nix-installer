@@ -1,18 +1,19 @@
-use crate::{
-    action::{
-        macos::NIX_VOLUME_MOUNTD_DEST, Action, ActionDescription, ActionError, ActionErrorKind,
-        ActionState, ActionTag, StatefulAction,
-    },
-    execute_command,
-    os::darwin::DiskUtilApfsListOutput,
-};
+use crate::{action::{
+    Action, ActionDescription, ActionError, ActionErrorKind,
+    ActionState, ActionTag, StatefulAction,
+}, execute_command, os::darwin::DiskUtilApfsListOutput};
 use rand::Rng;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
 };
+use owo_colors::OwoColorize;
+use std::io::{Cursor, Error, stdout, Stdout, Write};
 use tokio::process::Command;
 use tracing::{span, Span};
+use simple_home_dir::*;
+use term::{TerminfoTerminal};
+use crate::os::darwin::DiskUtilInfoOutput;
 
 use super::CreateApfsVolume;
 
@@ -37,11 +38,14 @@ impl EncryptApfsVolume {
 
         let mut command = Command::new("/usr/bin/security");
         command.args(["find-generic-password", "-a"]);
-        command.arg(&name);
+        // command.arg(&name);
+        command.arg("<VolumeUUID>");
         command.arg("-s");
-        command.arg("Nix Store");
+        command.arg("<VolumeUUID>");
+        // command.arg("Nix Store");
         command.arg("-l");
-        command.arg(&format!("{} encryption password", disk.display()));
+        command.arg("Nix Store");
+        // command.arg(&format!("{} encryption password", disk.display()));
         command.arg("-D");
         command.arg("Encrypted volume password");
         command.process_group(0);
@@ -127,7 +131,7 @@ impl Action for EncryptApfsVolume {
         disk = %self.disk.display(),
     ))]
     async fn execute(&mut self) -> Result<(), ActionError> {
-        let Self { disk, name } = self;
+        let Self { disk: _, name } = self;
 
         // Generate a random password.
         let password: String = {
@@ -145,39 +149,106 @@ impl Action for EncryptApfsVolume {
                 .collect()
         };
 
-        let disk_str = disk.to_str().expect("Could not turn disk into string"); /* Should not reasonably ever fail */
+        // let disk_str = disk.to_str().expect("Could not turn disk into string"); /* Should not reasonably ever fail */
 
         execute_command(Command::new("/usr/sbin/diskutil").arg("mount").arg(&name))
             .await
             .map_err(Self::error)?;
+
+        let keychain = format!("{}/Library/Keychains/login.keychain-db", home_dir().unwrap().display());
+
+        let volume_uuid = {
+            let buf = execute_command(
+                Command::new("/usr/sbin/diskutil")
+                    .process_group(0)
+                    .args(["info", "-plist"])
+                    .arg(name.as_str())
+                    .stdin(std::process::Stdio::null()),
+            )
+                .await
+                .map_err(Self::error)?
+                .stdout;
+            let the_plist: DiskUtilInfoOutput =
+                plist::from_reader(Cursor::new(buf)).map_err(Self::error)?;
+
+            the_plist.volume_uuid
+        };
 
         // Add the password to the user keychain so they can unlock it later.
         execute_command(
             Command::new("/usr/bin/security").process_group(0).args([
                 "add-generic-password",
                 "-a",
-                name.as_str(),
+                volume_uuid.as_str(),
+                // name.as_str(),
                 "-s",
-                "Nix Store",
+                volume_uuid.as_str(),
+                // "Nix Store",
                 "-l",
-                format!("{} encryption password", disk_str).as_str(),
+                "Nix Store",
+                // format!("{} encryption password", disk_str).as_str(),
                 "-D",
                 "Encrypted volume password",
                 "-j",
-                format!(
-                    "Added automatically by the Nix installer for use by {NIX_VOLUME_MOUNTD_DEST}"
-                )
-                .as_str(),
+                "Added automatically by the Nix installer",
                 "-w",
                 password.as_str(),
+                "-T",
+                "/System/Applications/Utilities/Disk Utility.app",
                 "-T",
                 "/System/Library/CoreServices/APFSUserAgent",
                 "-T",
                 "/System/Library/CoreServices/CSUserAgent",
                 "-T",
                 "/usr/bin/security",
-                "/Library/Keychains/System.keychain",
+                keychain.as_str(),
             ]),
+        )
+        .await
+        .map_err(Self::error)?;
+
+        let stdout = stdout();
+        let mut term =
+            term::terminfo::TerminfoTerminal::new(stdout).ok_or(Self::error(ActionErrorKind::CouldNotGetTerminal))?;
+        let help_message = format!(" \n {}{}\n", "HELP: ".cyan(), "The Login keychain password is needed to configure the 'Nix Store' item with ACLs allowing APFSUserAgent to mount the 'Nix Store' volume at login.".bold());
+        write_line(&mut term, help_message).map_err(|e| Self::error(ActionErrorKind::TerminalWrite(e)))?;
+
+        let mut login_keychain_password;
+        let prompt_message = format!(" {} Login Keychain Password: ", "?".cyan());
+        let verify_message = format!(" {} Verify Password: ", "?".cyan());
+        let error_message = format!(" {} Passwords do not match.  Try again...\n\n", "!".red());
+        loop {
+            login_keychain_password = prompt_password(&mut term, prompt_message.clone()).map_err(|e| Self::error(ActionErrorKind::TerminalPasswordPrompt(e)))?;
+            let login_keychain_verification = prompt_password(&mut term, verify_message.clone()).map_err(|e| Self::error(ActionErrorKind::TerminalPasswordPrompt(e)))?;
+            if login_keychain_password != login_keychain_verification {
+                write_line(&mut term, error_message.clone()).map_err(|e| Self::error(ActionErrorKind::TerminalWrite(e)))?;
+            } else {
+                break;
+            }
+        }
+
+        // Add additional ACLs to the keychain so that it can be used by APFSUserAgent at boot to mount the volume
+        execute_command(
+            Command::new("/usr/bin/security").process_group(0).args([
+                "set-generic-password-partition-list",
+                "-a",
+                volume_uuid.as_str(),
+                "-s",
+                volume_uuid.as_str(),
+                "-l",
+                "Nix Store",
+                "-D",
+                "Encrypted volume password",
+                "-j",
+                "Added automatically by the Nix installer",
+                "-k",
+                login_keychain_password.as_str(),
+                "-S",
+                "apple-tool:,apple:",
+                keychain.as_str(),
+            ])
+            .stdout(Stdio::piped())
+            .stdin(Stdio::piped())
         )
         .await
         .map_err(Self::error)?;
@@ -195,15 +266,15 @@ impl Action for EncryptApfsVolume {
         .await
         .map_err(Self::error)?;
 
-        execute_command(
-            Command::new("/usr/sbin/diskutil")
-                .process_group(0)
-                .arg("unmount")
-                .arg("force")
-                .arg(&name),
-        )
-        .await
-        .map_err(Self::error)?;
+        // execute_command(
+        //     Command::new("/usr/sbin/diskutil")
+        //         .process_group(0)
+        //         .arg("unmount")
+        //         .arg("force")
+        //         .arg(&name),
+        // )
+        // .await
+        // .map_err(Self::error)?;
 
         Ok(())
     }
@@ -222,25 +293,39 @@ impl Action for EncryptApfsVolume {
         disk = %self.disk.display(),
     ))]
     async fn revert(&mut self) -> Result<(), ActionError> {
-        let disk_str = self.disk.to_str().expect("Could not turn disk into string"); /* Should not reasonably ever fail */
+        let volume_uuid = {
+            let buf = execute_command(
+                Command::new("/usr/sbin/diskutil")
+                    .process_group(0)
+                    .args(["info", "-plist"])
+                    .arg(self.name.as_str())
+                    .stdin(std::process::Stdio::null()),
+            )
+                .await
+                .map_err(Self::error)?
+                .stdout;
+            let the_plist: DiskUtilInfoOutput =
+                plist::from_reader(Cursor::new(buf)).map_err(Self::error)?;
+
+            the_plist.volume_uuid
+        };
 
         // TODO: This seems very rough and unsafe
         execute_command(
             Command::new("/usr/bin/security").process_group(0).args([
                 "delete-generic-password",
                 "-a",
-                self.name.as_str(),
+                volume_uuid.as_str(),
+                // name.as_str(),
                 "-s",
-                self.name.as_str(),
+                volume_uuid.as_str(),
+                // "Nix Store",
                 "-l",
-                format!("{} encryption password", disk_str).as_str(),
+                "Nix Store",
                 "-D",
                 "Encrypted volume password",
                 "-j",
-                format!(
-                    "Added automatically by the Nix installer for use by {NIX_VOLUME_MOUNTD_DEST}"
-                )
-                .as_str(),
+                "Added automatically by the Nix installer",
             ]),
         )
         .await
@@ -249,6 +334,40 @@ impl Action for EncryptApfsVolume {
         Ok(())
     }
 }
+
+fn write_line(term: &mut TerminfoTerminal<Stdout>, help_message: String) -> std::io::Result<()> {
+    term.write_all(help_message.as_bytes())?;
+    term.flush()?;
+    Ok(())
+}
+
+fn prompt_password(term: &mut TerminfoTerminal<Stdout>, prompt_message: String) -> Result<String, Error> {
+    loop {
+        write_line(term, prompt_message.clone())?;
+        // term.attr(Attr::Secure)?;
+        let password = rpassword::read_password().unwrap();
+        // let line = match read_line() {
+        //     Ok(n) => {
+        //         term.reset()?;
+        //         n.unwrap_or_default()
+        //     },
+        //     Err(err) => {
+        //         term.reset()?;
+        //         return Err(err);
+        //     },
+        // };
+        if !password.is_empty() {
+            return Ok(password);
+        }
+    }
+}
+
+// fn read_line() -> Result<Option<String>, Error> {
+//     let stdin = stdin();
+//     let stdin = stdin.lock();
+//     let mut lines = stdin.lines();
+//     lines.next().transpose()
+// }
 
 #[derive(thiserror::Error, Debug)]
 pub enum EncryptApfsVolumeError {

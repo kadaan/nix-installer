@@ -1,15 +1,26 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{fs, path::PathBuf, str::FromStr};
+use std::process::Output;
+use futures::future::join_all;
 
-use crate::{
-    action::{Action, ActionDescription, StatefulAction},
-    planner::{BuiltinPlanner, Planner},
-    NixInstallerError,
-};
+use crate::{action::{Action, ActionDescription, StatefulAction}, planner::{BuiltinPlanner, Planner}, NixInstallerError, execute_command};
 use owo_colors::OwoColorize;
 use semver::{Version, VersionReq};
+use tokio::process::Command;
 use tokio::sync::broadcast::Receiver;
+use crate::action::ActionErrorKind;
+use crate::cli::CURRENT_USERNAME;
+use crate::settings::CommonSettings;
 
 pub const RECEIPT_LOCATION: &str = "/nix/receipt.json";
+
+#[macro_export]
+macro_rules! wait_for_enter {
+    ($($arg:tt)*) => {
+        eprintln!($($arg)*);
+        eprintln!("Press <ENTER> to continue...");
+        let _: String = text_io::read!("{}\n");
+    }
+}
 
 /**
 A set of [`Action`]s, along with some metadata, which can be carried out to drive an install or
@@ -84,7 +95,7 @@ impl InstallPlan {
             version,
             ..
         } = self;
-
+        planner.configured_settings().await?;
         let plan_settings = if explain {
             // List all settings when explaining
             planner.settings()?
@@ -153,6 +164,7 @@ impl InstallPlan {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn install(
         &mut self,
+        settings: CommonSettings,
         cancel_channel: impl Into<Option<Receiver<()>>>,
     ) -> Result<(), NixInstallerError> {
         self.check_compatible()?;
@@ -212,35 +224,39 @@ impl InstallPlan {
 
         write_receipt(self.clone()).await?;
 
-        if let Err(err) = crate::self_test::self_test()
-            .await
-            .map_err(NixInstallerError::SelfTest)
-        {
-            #[cfg(feature = "diagnostics")]
-            if let Some(diagnostic_data) = &self.diagnostic_data {
-                diagnostic_data
-                    .clone()
-                    .failure(&err)
-                    .send(
-                        crate::diagnostics::DiagnosticAction::Install,
-                        crate::diagnostics::DiagnosticStatus::Failure,
-                    )
-                    .await?;
-            }
+        // if let Err(err) = crate::self_test::self_test()
+        //     .await
+        //     .map_err(NixInstallerError::SelfTest)
+        // {
+        //     #[cfg(feature = "diagnostics")]
+        //     if let Some(diagnostic_data) = &self.diagnostic_data {
+        //         diagnostic_data
+        //             .clone()
+        //             .failure(&err)
+        //             .send(
+        //                 crate::diagnostics::DiagnosticAction::Install,
+        //                 crate::diagnostics::DiagnosticStatus::Failure,
+        //             )
+        //             .await?;
+        //     }
+        //
+        //     tracing::warn!("{err:?}")
+        // } else {
+        //     #[cfg(feature = "diagnostics")]
+        //     if let Some(diagnostic_data) = &self.diagnostic_data {
+        //         diagnostic_data
+        //             .clone()
+        //             .send(
+        //                 crate::diagnostics::DiagnosticAction::Install,
+        //                 crate::diagnostics::DiagnosticStatus::Success,
+        //             )
+        //             .await?;
+        //     }
+        // }
 
-            tracing::warn!("{err:?}")
-        } else {
-            #[cfg(feature = "diagnostics")]
-            if let Some(diagnostic_data) = &self.diagnostic_data {
-                diagnostic_data
-                    .clone()
-                    .send(
-                        crate::diagnostics::DiagnosticAction::Install,
-                        crate::diagnostics::DiagnosticStatus::Success,
-                    )
-                    .await?;
-            }
-        }
+        chown_nix_store(CURRENT_USERNAME.get().unwrap().to_string(), Some(settings.nix_build_group_name.clone()))
+            .await
+            .map_err(|e| NixInstallerError::Chown(String::from("/nix"), e))?;
 
         Ok(())
     }
@@ -421,7 +437,10 @@ async fn write_receipt(plan: InstallPlan) -> Result<(), NixInstallerError> {
         serde_json::to_string_pretty(&plan).map_err(NixInstallerError::SerializingReceipt)?;
     tokio::fs::write(&install_receipt_path, format!("{self_json}\n"))
         .await
-        .map_err(|e| NixInstallerError::RecordingReceipt(install_receipt_path, e))?;
+        .map_err(|e| NixInstallerError::RecordingReceipt(install_receipt_path.clone(), e))?;
+    chown_nix_store(CURRENT_USERNAME.get().unwrap().to_string(), None::<String>)
+        .await
+        .map_err(|e| NixInstallerError::Chown(install_receipt_path.display().to_string(), e))?;
     Result::<(), NixInstallerError>::Ok(())
 }
 
@@ -430,6 +449,39 @@ pub fn current_version() -> Result<Version, NixInstallerError> {
     Version::from_str(nix_installer_version_str).map_err(|e| {
         NixInstallerError::InvalidCurrentVersion(nix_installer_version_str.to_string(), e)
     })
+}
+
+pub(crate) async fn chown_nix_store(username: String, groupname: Option<String>) -> Result<Vec<Output>, ActionErrorKind>  {
+    return chown_path_recursive(String::from("/nix"), username, groupname).await;
+}
+
+async fn chown_path_recursive(root: String, username: String, groupname: Option<String>) -> Result<Vec<Output>, ActionErrorKind> {
+    let mut futures = Vec::new();
+    futures.push(chown_path(root.clone(), username.clone(), groupname.clone(), None));
+    let paths = fs::read_dir(root.clone()).unwrap();
+    for path in paths {
+        let path_str = path.unwrap().path().display().to_string();
+        if ! path_str.ends_with("/.Trashes") {
+            futures.push(chown_path(path_str, username.clone(), groupname.clone(), Some(true)));
+        }
+    }
+    return join_all(futures).await.into_iter().collect();
+}
+
+async fn chown_path(path: String, username: String, groupname: Option<String>, recursive: Option<bool>) -> Result<Output, ActionErrorKind> {
+    let mut owner = username.clone();
+    if groupname.is_some() {
+        owner = format!("{}:{}", owner, groupname.unwrap())
+    }
+    let mut command = Command::new("chown");
+    command.process_group(0);
+    if recursive.unwrap_or_default() {
+        command.arg("-R");
+    }
+    execute_command(command
+        .arg(owner.as_str())
+        .arg(path.as_str())
+        .stdin(std::process::Stdio::null())).await
 }
 
 #[cfg(test)]
