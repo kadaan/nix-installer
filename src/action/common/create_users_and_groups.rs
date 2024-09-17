@@ -1,3 +1,4 @@
+use nix::unistd::{Uid, User};
 use crate::{
     action::{
         base::{AddUserToGroup, CreateGroup, CreateUser},
@@ -6,6 +7,7 @@ use crate::{
     settings::CommonSettings,
 };
 use tracing::{span, Span};
+use uzers::get_group_by_gid;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
 pub struct CreateUsersAndGroups {
@@ -22,17 +24,36 @@ pub struct CreateUsersAndGroups {
 impl CreateUsersAndGroups {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn plan(settings: CommonSettings) -> Result<StatefulAction<Self>, ActionError> {
+        let mut gid = settings.nix_build_group_id;
+        loop {
+            let group = get_group_by_gid(gid);
+            if group.is_none() || group.unwrap().name() == settings.nix_build_group_name.clone().as_str() {
+                break;
+            }
+            gid = gid + 1;
+        }
+
         let create_group = CreateGroup::plan(
             settings.nix_build_group_name.clone(),
             settings.nix_build_group_id,
         )?;
         let mut create_users = Vec::with_capacity(settings.nix_build_user_count as usize);
         let mut add_users_to_groups = Vec::with_capacity(settings.nix_build_user_count as usize);
+        let mut uid = settings.nix_build_user_id_base + 1;
         for index in 1..=settings.nix_build_user_count {
+            let mut name = format!("{}{uid}", settings.nix_build_user_prefix);
+            loop {
+                let user = User::from_uid(Uid::from_raw(uid)).unwrap();
+                if user.is_none() || user.unwrap().name == name {
+                    break;
+                }
+                uid = uid + 1;
+                name = format!("{}{uid}", settings.nix_build_user_prefix);
+            }
             create_users.push(
                 CreateUser::plan(
-                    format!("{}{index}", settings.nix_build_user_prefix),
-                    settings.nix_build_user_id_base + index,
+                    name.clone(),
+                    uid,
                     settings.nix_build_group_name.clone(),
                     settings.nix_build_group_id,
                     format!("Nix build user {index}"),
@@ -42,14 +63,15 @@ impl CreateUsersAndGroups {
             );
             add_users_to_groups.push(
                 AddUserToGroup::plan(
-                    format!("{}{index}", settings.nix_build_user_prefix),
-                    settings.nix_build_user_id_base + index,
+                    name,
+                    uid,
                     settings.nix_build_group_name.clone(),
                     settings.nix_build_group_id,
                 )
                 .await
                 .map_err(Self::error)?,
             );
+            uid = uid + 1;
         }
         Ok(Self {
             nix_build_user_count: settings.nix_build_user_count,
