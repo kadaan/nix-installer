@@ -34,6 +34,10 @@ impl ConfigureShellProfile {
             # Nix\n\
             if [ -e '{PROFILE_NIX_FILE_SHELL}' ]; then\n\
             {inde}. '{PROFILE_NIX_FILE_SHELL}'\n\
+            {inde}PATH_PARTS=(\"${{(@s/:/)PATH}}\")\n\
+            {inde}LOCAL_BIN_PATH=\"${{HOME}}/.local/bin\"\n\
+            {inde}PATH_PARTS=(\"${{(@)PATH_PARTS:#$LOCAL_BIN_PATH}}\")\n\
+            {inde}export PATH=\"$LOCAL_BIN_PATH:${{(j/:/)PATH_PARTS}}\"\n\
             fi\n\
             # End Nix\n
         \n",

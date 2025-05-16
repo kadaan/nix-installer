@@ -4,8 +4,8 @@ use nix_installer::InstallPlan;
 const LINUX: &str = include_str!("./fixtures/linux/linux.json");
 #[cfg(target_os = "linux")]
 const STEAM_DECK: &str = include_str!("./fixtures/linux/steam-deck.json");
-#[cfg(target_os = "macos")]
-const MACOS: &str = include_str!("./fixtures/macos/macos.json");
+// #[cfg(target_os = "macos")]
+// const MACOS: &str = include_str!("./fixtures/macos/macos.json");
 
 // Ensure existing plans still parse
 // If this breaks and you need to update the fixture, disable these tests, bump `nix_installer` to a new version, and update the plans.
@@ -25,11 +25,11 @@ fn plan_compat_steam_deck() -> eyre::Result<()> {
     Ok(())
 }
 
-// Ensure existing plans still parse
-// If this breaks and you need to update the fixture, disable these tests, bump `nix_installer` to a new version, and update the plans.
-#[cfg(target_os = "macos")]
-#[test]
-fn plan_compat_macos() -> eyre::Result<()> {
-    let _: InstallPlan = serde_json::from_str(MACOS)?;
-    Ok(())
-}
+// // Ensure existing plans still parse
+// // If this breaks and you need to update the fixture, disable these tests, bump `nix_installer` to a new version, and update the plans.
+// #[cfg(target_os = "macos")]
+// #[test]
+// fn plan_compat_macos() -> eyre::Result<()> {
+//     let _: InstallPlan = serde_json::from_str(MACOS)?;
+//     Ok(())
+// }

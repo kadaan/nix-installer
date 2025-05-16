@@ -90,7 +90,7 @@ pub struct CommonSettings {
         feature = "cli",
         clap(
             long,
-            default_value_t = 350,
+            default_value_t = 30_000,
             env = "NIX_INSTALLER_NIX_BUILD_GROUP_ID",
             global = true
         )
@@ -135,7 +135,7 @@ pub struct CommonSettings {
         all(target_os = "macos", feature = "cli"),
         doc = "Service users on Mac should be between 200-400"
     )]
-    #[cfg_attr(all(target_os = "macos", feature = "cli"), clap(default_value_t = 300))]
+    #[cfg_attr(all(target_os = "macos", feature = "cli"), clap(default_value_t = 350))]
     #[cfg_attr(
         all(target_os = "linux", feature = "cli"),
         clap(default_value_t = 30_000)
@@ -283,7 +283,7 @@ impl CommonSettings {
             | (Architecture::X86_64, OperatingSystem::Darwin) => {
                 url = NIX_X64_64_DARWIN_URL;
                 nix_build_user_prefix = "_nixbld";
-                nix_build_user_id_base = 300;
+                nix_build_user_id_base = 350;
                 nix_build_user_count = 32;
             },
             #[cfg(target_os = "macos")]
@@ -291,7 +291,7 @@ impl CommonSettings {
             | (Architecture::Aarch64(_), OperatingSystem::Darwin) => {
                 url = NIX_AARCH64_DARWIN_URL;
                 nix_build_user_prefix = "_nixbld";
-                nix_build_user_id_base = 300;
+                nix_build_user_id_base = 350;
                 nix_build_user_count = 32;
             },
             _ => {
@@ -304,7 +304,7 @@ impl CommonSettings {
         Ok(Self {
             // modify_profile: true,
             nix_build_group_name: String::from("nixbld"),
-            nix_build_group_id: 350,
+            nix_build_group_id: 30_000,
             nix_build_user_id_base,
             nix_build_user_count,
             nix_build_user_prefix: nix_build_user_prefix.to_string(),

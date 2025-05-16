@@ -1,9 +1,7 @@
-cargo-features = ["profile-rustflags"]
-
 [package]
 name = "nix-installer"
 description = "The Determinate Nix Installer"
-version = "0.16.2"
+version = "0.16.2-ens001"
 edition = "2021"
 resolver = "2"
 license = "LGPL-2.1"
@@ -78,4 +76,3 @@ tempfile = "3.3.0"
 strip = true  # Automatically strip symbols from the binary.
 opt-level = "z"  # Optimize for size.
 lto = true
-rustflags = ["-C", "link-args=-headerpad_max_install_names"]
